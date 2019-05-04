@@ -1,4 +1,4 @@
-module github.com/tonistiigi/sbox
+module github.com/tonistiigi/vzor/sbox
 
 go 1.12
 

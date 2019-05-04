@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 
-	"github.com/tonistiigi/sbox"
+	"github.com/tonistiigi/vzor/sbox"
 )
 
 func main() {
