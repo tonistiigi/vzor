@@ -1,14 +1,10 @@
-package sbox
+package runk
 
 import (
 	"github.com/pkg/errors"
-	_ "gvisor.googlesource.com/gvisor/pkg/sentry/fs/tty"
 	"gvisor.googlesource.com/gvisor/pkg/sentry/inet"
 	"gvisor.googlesource.com/gvisor/pkg/sentry/socket/epsocket"
 	"gvisor.googlesource.com/gvisor/pkg/sentry/socket/hostinet"
-	_ "gvisor.googlesource.com/gvisor/pkg/sentry/socket/netlink"
-	_ "gvisor.googlesource.com/gvisor/pkg/sentry/socket/netlink/route"
-	_ "gvisor.googlesource.com/gvisor/pkg/sentry/socket/unix"
 	"gvisor.googlesource.com/gvisor/pkg/tcpip"
 	"gvisor.googlesource.com/gvisor/pkg/tcpip/network/arp"
 	"gvisor.googlesource.com/gvisor/pkg/tcpip/network/ipv4"
@@ -17,10 +13,14 @@ import (
 	"gvisor.googlesource.com/gvisor/pkg/tcpip/transport/icmp"
 	"gvisor.googlesource.com/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.googlesource.com/gvisor/pkg/tcpip/transport/udp"
+
+	_ "gvisor.googlesource.com/gvisor/pkg/sentry/socket/netlink"
+	_ "gvisor.googlesource.com/gvisor/pkg/sentry/socket/netlink/route"
+	_ "gvisor.googlesource.com/gvisor/pkg/sentry/socket/unix"
 )
 
-func netStack(clock tcpip.Clock, hostnet bool) (inet.Stack, error) {
-	if hostnet {
+func netStack(clock tcpip.Clock, network Network) (inet.Stack, error) {
+	if network == NetHost {
 		return hostinet.NewStack(), nil
 	}
 	netProtos := []string{ipv4.ProtocolName, ipv6.ProtocolName, arp.ProtocolName}

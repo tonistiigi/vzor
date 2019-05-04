@@ -3,6 +3,7 @@
 FROM golang:1.12-alpine AS sbox
 RUN apk add --no-cache file git
 WORKDIR /src
+ENV CGO_ENABLED=0
 RUN --mount=target=. \
   --mount=target=/root/.cache,type=cache \
   --mount=target=/go/pkg/mod,type=cache \

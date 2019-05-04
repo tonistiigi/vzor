@@ -1,18 +1,18 @@
-package sbox
+package runk
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 
 	"gvisor.googlesource.com/gvisor/pkg/abi/linux"
 	"gvisor.googlesource.com/gvisor/pkg/cpuid"
 	"gvisor.googlesource.com/gvisor/pkg/log"
 	"gvisor.googlesource.com/gvisor/pkg/sentry/context"
 	"gvisor.googlesource.com/gvisor/pkg/sentry/fs"
-	host "gvisor.googlesource.com/gvisor/pkg/sentry/fs/host"
+	"gvisor.googlesource.com/gvisor/pkg/sentry/fs/host"
 	"gvisor.googlesource.com/gvisor/pkg/sentry/fs/ramfs"
 	"gvisor.googlesource.com/gvisor/pkg/sentry/kernel"
 	"gvisor.googlesource.com/gvisor/pkg/sentry/kernel/auth"
@@ -33,11 +33,25 @@ import (
 	_ "gvisor.googlesource.com/gvisor/pkg/sentry/fs/tty"
 )
 
+type ProcessOpt struct {
+	TTY            bool
+	Args           []string
+	Env            []string
+	Stdout, Stderr io.Writer
+	Stdin          io.Reader
+}
+
+type Network int
+
+const (
+	NetNone Network = iota
+	NetHost
+)
+
 type Opt struct {
-	HostNet bool
-	TTY     bool
-	Mounts  string
-	Args    []string
+	Process ProcessOpt
+	Mounts  []string
+	Network Network
 }
 
 func Run(o Opt) error {
@@ -77,7 +91,7 @@ func Run(o Opt) error {
 	}
 	tk.SetClocks(time.NewCalibratedClocks())
 
-	networkStack, err := netStack(k, o.HostNet)
+	networkStack, err := netStack(k, o.Network)
 	if err != nil {
 		return err
 	}
@@ -117,7 +131,7 @@ func Run(o Opt) error {
 
 	// Create the process arguments.
 	procArgs := kernel.CreateProcessArgs{
-		Argv:                    o.Args,
+		Argv:                    o.Process.Args,
 		Envv:                    []string{},
 		WorkingDirectory:        "/", // Defaults to '/' if empty.
 		Credentials:             creds,
@@ -131,7 +145,7 @@ func Run(o Opt) error {
 	}
 	ctx := procArgs.NewContext(k)
 
-	fdm, err := createFDMap(ctx, k, ls, o.TTY, []int{0, 1, 2})
+	fdm, err := createFDMap(ctx, k, ls, o.Process.TTY, []int{0, 1, 2})
 	if err != nil {
 		return fmt.Errorf("error importing fds: %v", err)
 	}
@@ -150,7 +164,7 @@ func Run(o Opt) error {
 	mns := k.RootMountNamespace()
 	if mns == nil {
 		followLinks := uint(linux.MaxSymlinkTraversals)
-		mns, err := createMountNamespace(ctx, rootCtx, strings.Split(o.Mounts, ","), &followLinks)
+		mns, err := createMountNamespace(ctx, rootCtx, o.Mounts, &followLinks)
 		if err != nil {
 			return fmt.Errorf("error creating mounts: %v", err)
 		}
@@ -162,7 +176,7 @@ func Run(o Opt) error {
 	}
 
 	tg := k.GlobalInit()
-	if o.TTY {
+	if o.Process.TTY {
 		ttyFile := procArgs.FDMap.GetFile(0)
 		defer ttyFile.DecRef()
 		ttyfop := ttyFile.FileOperations.(*host.TTYFileOperations)
@@ -254,7 +268,6 @@ func createRootMount(ctx context.Context, mounts []string) (*fs.Inode, error) {
 		if !filepath.IsAbs(m) {
 			m = filepath.Join(wd, m)
 		}
-		// fmt.Println("root=" + m)
 		rootInode, err = host.Mount(ctx, "", mf, "root="+m, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate root mount point: %v", err)

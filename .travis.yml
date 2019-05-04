@@ -7,4 +7,4 @@ install:
   - docker buildx create --use
 
 script:
-  - docker build --progress=plain sbox
+  - docker build --progress=plain -f ./cmd/sbox/Dockerfile .
