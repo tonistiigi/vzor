@@ -1,7 +1,7 @@
 #syntax=docker/dockerfile-upstream:experimental
 
 FROM golang:1.12-alpine AS sbox
-RUN apk add --no-cache file
+RUN apk add --no-cache file git
 WORKDIR /src
 RUN --mount=target=. \
   --mount=target=/root/.cache,type=cache \
