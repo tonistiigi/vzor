@@ -1,0 +1,10 @@
+dist: trusty
+sudo: required
+
+install:
+  - curl -fsSL https://tinyurl.com/install-buildx | sudo sh
+  - docker buildx install
+  - docker buildx create --use
+
+script:
+  - docker build --progress=plain sbox
