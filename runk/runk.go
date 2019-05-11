@@ -1,18 +1,19 @@
-package sbox
+package runk
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 
+	"github.com/pkg/errors"
 	"gvisor.googlesource.com/gvisor/pkg/abi/linux"
 	"gvisor.googlesource.com/gvisor/pkg/cpuid"
 	"gvisor.googlesource.com/gvisor/pkg/log"
 	"gvisor.googlesource.com/gvisor/pkg/sentry/context"
 	"gvisor.googlesource.com/gvisor/pkg/sentry/fs"
-	host "gvisor.googlesource.com/gvisor/pkg/sentry/fs/host"
+	"gvisor.googlesource.com/gvisor/pkg/sentry/fs/host"
 	"gvisor.googlesource.com/gvisor/pkg/sentry/fs/ramfs"
 	"gvisor.googlesource.com/gvisor/pkg/sentry/kernel"
 	"gvisor.googlesource.com/gvisor/pkg/sentry/kernel/auth"
@@ -33,11 +34,25 @@ import (
 	_ "gvisor.googlesource.com/gvisor/pkg/sentry/fs/tty"
 )
 
+type ProcessOpt struct {
+	TTY            bool
+	Args           []string
+	Env            []string
+	Stdout, Stderr io.Writer
+	Stdin          io.Reader
+}
+
+type Network int
+
+const (
+	NetNone Network = iota
+	NetHost
+)
+
 type Opt struct {
-	HostNet bool
-	TTY     bool
-	Mounts  string
-	Args    []string
+	Process ProcessOpt
+	Mounts  []string
+	Network Network
 }
 
 func Run(o Opt) error {
@@ -47,7 +62,7 @@ func Run(o Opt) error {
 	kernel.RegisterSyscallTable(slinux.AMD64)
 
 	if err := usage.Init(); err != nil {
-		return fmt.Errorf("error setting up memory usage: %v", err)
+		return errors.Wrap(err, "error setting up memory usage")
 	}
 
 	p, err := newPlatform()
@@ -62,22 +77,22 @@ func Run(o Opt) error {
 	// Create memory file.
 	mf, err := createMemoryFile()
 	if err != nil {
-		return fmt.Errorf("creating memory file: %v", err)
+		return errors.Wrap(err, "creating memory file")
 	}
 	k.SetMemoryFile(mf)
 
 	vdso, err := loader.PrepareVDSO(k)
 	if err != nil {
-		return fmt.Errorf("error creating vdso: %v", err)
+		return errors.Wrap(err, "error creating vdso")
 	}
 
 	tk, err := kernel.NewTimekeeper(k, vdso.ParamPage.FileRange())
 	if err != nil {
-		return fmt.Errorf("error creating timekeeper: %v", err)
+		return errors.Wrap(err, "error creating timekeeper")
 	}
 	tk.SetClocks(time.NewCalibratedClocks())
 
-	networkStack, err := netStack(k, o.HostNet)
+	networkStack, err := netStack(k, o.Network)
 	if err != nil {
 		return err
 	}
@@ -107,7 +122,7 @@ func Run(o Opt) error {
 		RootIPCNamespace:            kernel.NewIPCNamespace(creds.UserNamespace),
 		RootAbstractSocketNamespace: kernel.NewAbstractSocketNamespace(),
 	}); err != nil {
-		return fmt.Errorf("error initializing kernel: %v", err)
+		return errors.Wrap(err, "error initializing kernel")
 	}
 
 	ls, err := limits.NewLinuxLimitSet()
@@ -117,7 +132,7 @@ func Run(o Opt) error {
 
 	// Create the process arguments.
 	procArgs := kernel.CreateProcessArgs{
-		Argv:                    o.Args,
+		Argv:                    o.Process.Args,
 		Envv:                    []string{},
 		WorkingDirectory:        "/", // Defaults to '/' if empty.
 		Credentials:             creds,
@@ -131,9 +146,9 @@ func Run(o Opt) error {
 	}
 	ctx := procArgs.NewContext(k)
 
-	fdm, err := createFDMap(ctx, k, ls, o.TTY, []int{0, 1, 2})
+	fdm, err := createFDMap(ctx, k, ls, o.Process.TTY, []int{0, 1, 2})
 	if err != nil {
-		return fmt.Errorf("error importing fds: %v", err)
+		return errors.Wrap(err, "error importing fds")
 	}
 	// CreateProcess takes a reference on FDMap if successful. We
 	// won't need ours either way.
@@ -150,19 +165,19 @@ func Run(o Opt) error {
 	mns := k.RootMountNamespace()
 	if mns == nil {
 		followLinks := uint(linux.MaxSymlinkTraversals)
-		mns, err := createMountNamespace(ctx, rootCtx, strings.Split(o.Mounts, ","), &followLinks)
+		mns, err := createMountNamespace(ctx, rootCtx, o.Mounts, &followLinks)
 		if err != nil {
-			return fmt.Errorf("error creating mounts: %v", err)
+			return errors.Wrap(err, "error creating mounts")
 		}
 		k.SetRootMountNamespace(mns)
 	}
 	_, _, err = k.CreateProcess(procArgs)
 	if err != nil {
-		return fmt.Errorf("failed to create init process: %v", err)
+		return errors.Wrap(err, "failed to create init process")
 	}
 
 	tg := k.GlobalInit()
-	if o.TTY {
+	if o.Process.TTY {
 		ttyFile := procArgs.FDMap.GetFile(0)
 		defer ttyFile.DecRef()
 		ttyfop := ttyFile.FileOperations.(*host.TTYFileOperations)
@@ -187,11 +202,11 @@ func addSubmountOverlay(ctx context.Context, inode *fs.Inode, submounts []string
 	msrc := fs.NewNonCachingMountSource(nil, fs.MountSourceFlags{})
 	mountTree, err := ramfs.MakeDirectoryTree(ctx, msrc, submounts)
 	if err != nil {
-		return nil, fmt.Errorf("error creating mount tree: %v", err)
+		return nil, errors.Wrap(err, "error creating mount tree")
 	}
 	overlayInode, err := fs.NewOverlayRoot(ctx, inode, mountTree, fs.MountSourceFlags{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to make mount overlay: %v", err)
+		return nil, errors.Wrap(err, "failed to make mount overlay")
 	}
 	return overlayInode, err
 }
@@ -199,12 +214,12 @@ func addSubmountOverlay(ctx context.Context, inode *fs.Inode, submounts []string
 func createMountNamespace(userCtx context.Context, rootCtx context.Context, mounts []string, maxTraversals *uint) (*fs.MountNamespace, error) {
 	rootInode, err := createRootMount(rootCtx, mounts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create root mount: %v", err)
+		return nil, errors.Wrap(err, "failed to create root mount")
 	}
 
 	mns, err := fs.NewMountNamespace(userCtx, rootInode)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create root mount namespace: %v", err)
+		return nil, errors.Wrap(err, "failed to create root mount namespace")
 	}
 
 	root := mns.Root()
@@ -217,16 +232,16 @@ func createMountNamespace(userCtx context.Context, rootCtx context.Context, moun
 	ctx := rootCtx
 	inode, err := proc.Mount(ctx, "none", fs.MountSourceFlags{}, "", nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create mount with source: %v", err)
+		return nil, errors.Wrap(err, "failed to create mount with source")
 	}
 
 	dirent, err := mns.FindInode(ctx, root, root, "/proc", maxTraversals)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find mount destination: %v", err)
+		return nil, errors.Wrap(err, "failed to find mount destination")
 	}
 	defer dirent.DecRef()
 	if err := mns.Mount(ctx, dirent, inode); err != nil {
-		return nil, fmt.Errorf("failed to mount at destination: %v", err)
+		return nil, errors.Wrap(err, "failed to mount at destination")
 	}
 
 	return mns, nil
@@ -254,15 +269,14 @@ func createRootMount(ctx context.Context, mounts []string) (*fs.Inode, error) {
 		if !filepath.IsAbs(m) {
 			m = filepath.Join(wd, m)
 		}
-		// fmt.Println("root=" + m)
 		rootInode, err = host.Mount(ctx, "", mf, "root="+m, nil)
 		if err != nil {
-			return nil, fmt.Errorf("failed to generate root mount point: %v", err)
+			return nil, errors.Wrap(err, "failed to generate root mount point")
 		}
 		if i != 0 {
 			rootInode, err = fs.NewOverlayRoot(ctx, rootInode, prevInode, fs.MountSourceFlags{})
 			if err != nil {
-				return nil, fmt.Errorf("failed to make mount overlay: %v", err)
+				return nil, errors.Wrap(err, "failed to make mount overlay")
 			}
 		}
 		prevInode = rootInode
@@ -271,7 +285,7 @@ func createRootMount(ctx context.Context, mounts []string) (*fs.Inode, error) {
 	submounts := []string{"/dev", "/sys", "/proc", "/tmp"}
 	rootInode, err = addSubmountOverlay(ctx, rootInode, submounts)
 	if err != nil {
-		return nil, fmt.Errorf("error adding submount overlay: %v", err)
+		return nil, errors.Wrap(err, "error adding submount overlay")
 	}
 
 	tmpfs, ok := fs.FindFilesystem("tmpfs")
@@ -281,11 +295,11 @@ func createRootMount(ctx context.Context, mounts []string) (*fs.Inode, error) {
 
 	upper, err := tmpfs.Mount(ctx, "upper", fs.MountSourceFlags{}, "", nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create tmpfs overlay: %v", err)
+		return nil, errors.Wrap(err, "failed to create tmpfs overlay")
 	}
 	rootInode, err = fs.NewOverlayRoot(ctx, upper, rootInode, fs.MountSourceFlags{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to make mount overlay: %v", err)
+		return nil, errors.Wrap(err, "failed to make mount overlay")
 	}
 
 	return rootInode, nil
@@ -293,7 +307,7 @@ func createRootMount(ctx context.Context, mounts []string) (*fs.Inode, error) {
 
 func createFDMap(ctx context.Context, k *kernel.Kernel, l *limits.LimitSet, console bool, stdioFDs []int) (*kernel.FDMap, error) {
 	if len(stdioFDs) != 3 {
-		return nil, fmt.Errorf("stdioFDs should contain exactly 3 FDs (stdin, stdout, and stderr), but %d FDs received", len(stdioFDs))
+		return nil, errors.Errorf("stdioFDs should contain exactly 3 FDs (stdin, stdout, and stderr), but %d FDs received", len(stdioFDs))
 	}
 
 	fdm := k.NewFDMap()
@@ -355,13 +369,13 @@ func createMemoryFile() (*pgalloc.MemoryFile, error) {
 	const memfileName = "runsc-memory"
 	memfd, err := memutil.CreateMemFD(memfileName, 0)
 	if err != nil {
-		return nil, fmt.Errorf("error creating memfd: %v", err)
+		return nil, errors.Wrap(err, "error creating memfd")
 	}
 	memfile := os.NewFile(uintptr(memfd), memfileName)
 	mf, err := pgalloc.NewMemoryFile(memfile, pgalloc.MemoryFileOpts{})
 	if err != nil {
 		memfile.Close()
-		return nil, fmt.Errorf("error creating pgalloc.MemoryFile: %v", err)
+		return nil, errors.Wrap(err, "error creating pgalloc.MemoryFile")
 	}
 	return mf, nil
 }
