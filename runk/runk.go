@@ -42,6 +42,17 @@ type ProcessOpt struct {
 	Stdin          io.Reader
 }
 
+type GVisorPlatform string
+
+const (
+	KVM    GVisorPlatform = "kvm"
+	Ptrace                = "ptrace"
+)
+
+type GVisorOpt struct {
+	Platform GVisorPlatform
+}
+
 type Network int
 
 const (
@@ -53,6 +64,7 @@ type Opt struct {
 	Process ProcessOpt
 	Mounts  []string
 	Network Network
+	GVisor  GVisorOpt
 }
 
 func Run(o Opt) error {
@@ -65,7 +77,7 @@ func Run(o Opt) error {
 		return errors.Wrap(err, "error setting up memory usage")
 	}
 
-	p, err := newPlatform()
+	p, err := newPlatform(o.GVisor.Platform)
 	if err != nil {
 		return err
 	}

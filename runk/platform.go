@@ -9,18 +9,24 @@ import (
 	"gvisor.googlesource.com/gvisor/pkg/sentry/platform/ptrace"
 )
 
-func newPlatform() (platform.Platform, error) {
-	f, err := os.Open("/dev/kvm")
-	if err == nil {
-		p, err := kvm.New(f)
-		if err == nil {
-			return p, nil
+func newPlatform(gvp GVisorPlatform) (platform.Platform, error) {
+	if gvp == "" {
+		gvp = Ptrace
+		if _, err := os.Stat("/dev/kvm"); err == nil {
+			gvp = KVM
 		}
 	}
 
-	p, err := ptrace.New()
-	if err != nil {
-		return nil, errors.WithStack(err)
+	switch gvp {
+	case KVM:
+		f, err := os.Open("/dev/kvm")
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		return kvm.New(f)
+	case Ptrace:
+		return ptrace.New()
+	default:
+		return nil, errors.Errorf("could not set up gVisor platform (platform=%q)", gvp)
 	}
-	return p, nil
 }
