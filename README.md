@@ -4,7 +4,7 @@ Yuri Gagarin on April 12, 1961:
 
 > Во «взор» вижу Землю. Хорошо различима Земля.
 
-* I can see the Earth through the "VZOR" (porthole). The Earth is clearly visible.*
+*I can see the Earth through the "VZOR" (porthole). The Earth is clearly visible.*
 
 Source: http://epizodsspace.airbase.ru/bibl/i_tsk/zv-reis.html
 
