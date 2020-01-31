@@ -4,9 +4,9 @@ import (
 	"os"
 
 	"github.com/pkg/errors"
-	"gvisor.googlesource.com/gvisor/pkg/sentry/platform"
-	"gvisor.googlesource.com/gvisor/pkg/sentry/platform/kvm"
-	"gvisor.googlesource.com/gvisor/pkg/sentry/platform/ptrace"
+	"gvisor.dev/gvisor/pkg/sentry/platform"
+	"gvisor.dev/gvisor/pkg/sentry/platform/kvm"
+	"gvisor.dev/gvisor/pkg/sentry/platform/ptrace"
 )
 
 func newPlatform(gvp GVisorPlatform) (platform.Platform, error) {

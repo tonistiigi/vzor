@@ -4,9 +4,7 @@ go 1.12
 
 require (
 	github.com/pkg/errors v0.8.1
-	golang.org/x/sync v0.0.0-20190423024810-112230192c58 // indirect
 	golang.org/x/sys v0.0.0-20190502175342-a43fa875dd82 // indirect
-	gvisor.googlesource.com/gvisor v0.0.0
+	golang.org/x/time v0.0.0-20191024005414-555d28b269f0 // indirect
+	gvisor.dev/gvisor v0.0.0-20200131182101-f6f9f6924169
 )
-
-replace gvisor.googlesource.com/gvisor => github.com/tonistiigi/gvisor v0.0.0-20190503211308-a2a954fbc1ea

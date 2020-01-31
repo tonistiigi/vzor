@@ -2,21 +2,21 @@ package runk
 
 import (
 	"github.com/pkg/errors"
-	"gvisor.googlesource.com/gvisor/pkg/sentry/inet"
-	"gvisor.googlesource.com/gvisor/pkg/sentry/socket/epsocket"
-	"gvisor.googlesource.com/gvisor/pkg/sentry/socket/hostinet"
-	"gvisor.googlesource.com/gvisor/pkg/tcpip"
-	"gvisor.googlesource.com/gvisor/pkg/tcpip/network/arp"
-	"gvisor.googlesource.com/gvisor/pkg/tcpip/network/ipv4"
-	"gvisor.googlesource.com/gvisor/pkg/tcpip/network/ipv6"
-	"gvisor.googlesource.com/gvisor/pkg/tcpip/stack"
-	"gvisor.googlesource.com/gvisor/pkg/tcpip/transport/icmp"
-	"gvisor.googlesource.com/gvisor/pkg/tcpip/transport/tcp"
-	"gvisor.googlesource.com/gvisor/pkg/tcpip/transport/udp"
+	"gvisor.dev/gvisor/pkg/sentry/inet"
+	"gvisor.dev/gvisor/pkg/sentry/socket/hostinet"
+	"gvisor.dev/gvisor/pkg/sentry/socket/netstack"
+	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/network/arp"
+	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
+	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
+	"gvisor.dev/gvisor/pkg/tcpip/stack"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/icmp"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 
-	_ "gvisor.googlesource.com/gvisor/pkg/sentry/socket/netlink"
-	_ "gvisor.googlesource.com/gvisor/pkg/sentry/socket/netlink/route"
-	_ "gvisor.googlesource.com/gvisor/pkg/sentry/socket/unix"
+	_ "gvisor.dev/gvisor/pkg/sentry/socket/netlink"
+	_ "gvisor.dev/gvisor/pkg/sentry/socket/netlink/route"
+	_ "gvisor.dev/gvisor/pkg/sentry/socket/unix"
 )
 
 func netStack(clock tcpip.Clock, network Network) (inet.Stack, error) {
@@ -25,9 +25,9 @@ func netStack(clock tcpip.Clock, network Network) (inet.Stack, error) {
 	}
 	netProtos := []string{ipv4.ProtocolName, ipv6.ProtocolName, arp.ProtocolName}
 	protoNames := []string{tcp.ProtocolName, udp.ProtocolName, icmp.ProtocolName4}
-	s := epsocket.Stack{stack.New(netProtos, protoNames, stack.Options{
+	s := netstack.Stack{stack.New(netProtos, protoNames, stack.Options{
 		Clock:       clock,
-		Stats:       epsocket.Metrics,
+		Stats:       netstack.Metrics,
 		HandleLocal: true,
 		Raw:         true,
 	})}
