@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/tonistiigi/vzor/runk"
+	"gvisor.dev/gvisor/pkg/refs"
 )
 
 func main() {
@@ -25,6 +26,10 @@ func main() {
 	opt.Mounts = strings.Split(mounts, ",")
 
 	opt.Process.Args = flag.Args()
+
+	// Sets the reference leak check mode. Also set it in config below to
+	// propagate it to child processes.
+	refs.SetLeakMode(refs.NoLeakChecking) //TODO
 
 	if err := runk.Run(opt); err != nil {
 		panic(err)

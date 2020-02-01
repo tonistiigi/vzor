@@ -1,9 +1,11 @@
-#syntax=docker/dockerfile-upstream:experimental
+#syntax=docker/dockerfile:experimental
 
-FROM golang:1.12-alpine AS sbox
+FROM --platform=$BUILDPLATFORM golang:1.13-alpine AS sbox
 RUN apk add --no-cache file git
+COPY --from=tonistiigi/xx:golang / /
 WORKDIR /src
 ENV CGO_ENABLED=0
+ARG TARGETPLATFORM
 RUN --mount=target=. \
   --mount=target=/root/.cache,type=cache \
   --mount=target=/go/pkg/mod,type=cache \

@@ -8,30 +8,30 @@ import (
 	"runtime"
 
 	"github.com/pkg/errors"
-	"gvisor.googlesource.com/gvisor/pkg/abi/linux"
-	"gvisor.googlesource.com/gvisor/pkg/cpuid"
-	"gvisor.googlesource.com/gvisor/pkg/log"
-	"gvisor.googlesource.com/gvisor/pkg/sentry/context"
-	"gvisor.googlesource.com/gvisor/pkg/sentry/fs"
-	"gvisor.googlesource.com/gvisor/pkg/sentry/fs/host"
-	"gvisor.googlesource.com/gvisor/pkg/sentry/fs/ramfs"
-	"gvisor.googlesource.com/gvisor/pkg/sentry/kernel"
-	"gvisor.googlesource.com/gvisor/pkg/sentry/kernel/auth"
-	"gvisor.googlesource.com/gvisor/pkg/sentry/kernel/kdefs"
-	"gvisor.googlesource.com/gvisor/pkg/sentry/limits"
-	"gvisor.googlesource.com/gvisor/pkg/sentry/loader"
-	"gvisor.googlesource.com/gvisor/pkg/sentry/memutil"
-	"gvisor.googlesource.com/gvisor/pkg/sentry/pgalloc"
-	"gvisor.googlesource.com/gvisor/pkg/sentry/socket/hostinet"
-	slinux "gvisor.googlesource.com/gvisor/pkg/sentry/syscalls/linux"
-	"gvisor.googlesource.com/gvisor/pkg/sentry/time"
-	"gvisor.googlesource.com/gvisor/pkg/sentry/usage"
+	"gvisor.dev/gvisor/pkg/abi/linux"
+	"gvisor.dev/gvisor/pkg/context"
+	"gvisor.dev/gvisor/pkg/cpuid"
+	"gvisor.dev/gvisor/pkg/log"
+	"gvisor.dev/gvisor/pkg/memutil"
+	"gvisor.dev/gvisor/pkg/rand"
+	"gvisor.dev/gvisor/pkg/sentry/fs"
+	"gvisor.dev/gvisor/pkg/sentry/fs/host"
+	"gvisor.dev/gvisor/pkg/sentry/fs/ramfs"
+	"gvisor.dev/gvisor/pkg/sentry/kernel"
+	"gvisor.dev/gvisor/pkg/sentry/kernel/auth"
+	"gvisor.dev/gvisor/pkg/sentry/limits"
+	"gvisor.dev/gvisor/pkg/sentry/loader"
+	"gvisor.dev/gvisor/pkg/sentry/pgalloc"
+	"gvisor.dev/gvisor/pkg/sentry/socket/hostinet"
+	slinux "gvisor.dev/gvisor/pkg/sentry/syscalls/linux"
+	"gvisor.dev/gvisor/pkg/sentry/time"
+	"gvisor.dev/gvisor/pkg/sentry/usage"
 
-	_ "gvisor.googlesource.com/gvisor/pkg/sentry/fs/dev"
-	_ "gvisor.googlesource.com/gvisor/pkg/sentry/fs/proc"
-	_ "gvisor.googlesource.com/gvisor/pkg/sentry/fs/sys"
-	_ "gvisor.googlesource.com/gvisor/pkg/sentry/fs/tmpfs"
-	_ "gvisor.googlesource.com/gvisor/pkg/sentry/fs/tty"
+	_ "gvisor.dev/gvisor/pkg/sentry/fs/dev"
+	_ "gvisor.dev/gvisor/pkg/sentry/fs/proc"
+	_ "gvisor.dev/gvisor/pkg/sentry/fs/sys"
+	_ "gvisor.dev/gvisor/pkg/sentry/fs/tmpfs"
+	_ "gvisor.dev/gvisor/pkg/sentry/fs/tty"
 )
 
 type ProcessOpt struct {
@@ -73,6 +73,12 @@ func Run(o Opt) error {
 	// Register the global syscall table.
 	kernel.RegisterSyscallTable(slinux.AMD64)
 
+	// We initialize the rand package now to make sure /dev/urandom is pre-opened
+	// on kernels that do not support getrandom(2).
+	if err := rand.Init(); err != nil {
+		return errors.Wrap(err, "setting up rand")
+	}
+
 	if err := usage.Init(); err != nil {
 		return errors.Wrap(err, "error setting up memory usage")
 	}
@@ -93,7 +99,7 @@ func Run(o Opt) error {
 	}
 	k.SetMemoryFile(mf)
 
-	vdso, err := loader.PrepareVDSO(k)
+	vdso, err := loader.PrepareVDSO(nil, k)
 	if err != nil {
 		return errors.Wrap(err, "error creating vdso")
 	}
@@ -104,7 +110,7 @@ func Run(o Opt) error {
 	}
 	tk.SetClocks(time.NewCalibratedClocks())
 
-	networkStack, err := netStack(k, o.Network)
+	networkStack, err := netStack(k, k, o.Network)
 	if err != nil {
 		return err
 	}
@@ -130,9 +136,10 @@ func Run(o Opt) error {
 		NetworkStack:                networkStack,
 		ApplicationCores:            uint(runtime.NumCPU()),
 		Vdso:                        vdso,
-		RootUTSNamespace:            kernel.NewUTSNamespace("sbox", "", creds.UserNamespace),
+		RootUTSNamespace:            kernel.NewUTSNamespace("sbox", "sbox", creds.UserNamespace),
 		RootIPCNamespace:            kernel.NewIPCNamespace(creds.UserNamespace),
 		RootAbstractSocketNamespace: kernel.NewAbstractSocketNamespace(),
+		PIDNamespace:                kernel.NewRootPIDNamespace(creds.UserNamespace),
 	}); err != nil {
 		return errors.Wrap(err, "error initializing kernel")
 	}
@@ -155,42 +162,41 @@ func Run(o Opt) error {
 		IPCNamespace:            k.RootIPCNamespace(),
 		AbstractSocketNamespace: k.RootAbstractSocketNamespace(),
 		ContainerID:             "sbox",
+		PIDNamespace:            k.RootPIDNamespace(),
 	}
 	ctx := procArgs.NewContext(k)
 
-	fdm, err := createFDMap(ctx, k, ls, o.Process.TTY, []int{0, 1, 2})
+	fdt, err := createFDTable(ctx, k, ls, o.Process.TTY, []int{0, 1, 2})
 	if err != nil {
 		return errors.Wrap(err, "error importing fds")
 	}
-	// CreateProcess takes a reference on FDMap if successful. We
+	// CreateProcess takes a reference on fdTable if successful. We
 	// won't need ours either way.
-	procArgs.FDMap = fdm
+	procArgs.FDTable = fdt
 
-	rootProcArgs := kernel.CreateProcessArgs{
-		WorkingDirectory:     "/",
-		Credentials:          auth.NewRootCredentials(creds.UserNamespace),
-		Umask:                0022,
-		MaxSymlinkTraversals: linux.MaxSymlinkTraversals,
-	}
+	rootProcArgs := procArgs
+	rootProcArgs.WorkingDirectory = "/"
+	rootProcArgs.Credentials = auth.NewRootCredentials(creds.UserNamespace)
+	rootProcArgs.Umask = 0022
+	rootProcArgs.MaxSymlinkTraversals = linux.MaxSymlinkTraversals
+
 	rootCtx := rootProcArgs.NewContext(k)
 
-	mns := k.RootMountNamespace()
-	if mns == nil {
-		followLinks := uint(linux.MaxSymlinkTraversals)
-		mns, err := createMountNamespace(ctx, rootCtx, o.Mounts, &followLinks)
-		if err != nil {
-			return errors.Wrap(err, "error creating mounts")
-		}
-		k.SetRootMountNamespace(mns)
+	followLinks := uint(linux.MaxSymlinkTraversals)
+	mns, err := createMountNamespace(ctx, rootCtx, o.Mounts, &followLinks)
+	if err != nil {
+		return errors.Wrap(err, "error creating mounts")
 	}
-	_, _, err = k.CreateProcess(procArgs)
+	rootProcArgs.MountNamespace = mns
+
+	_, _, err = k.CreateProcess(rootProcArgs)
 	if err != nil {
 		return errors.Wrap(err, "failed to create init process")
 	}
 
 	tg := k.GlobalInit()
 	if o.Process.TTY {
-		ttyFile := procArgs.FDMap.GetFile(0)
+		ttyFile, _ := procArgs.FDTable.Get(0)
 		defer ttyFile.DecRef()
 		ttyfop := ttyFile.FileOperations.(*host.TTYFileOperations)
 		// Set the foreground process group on the TTY to the global
@@ -211,7 +217,7 @@ func Run(o Opt) error {
 func addSubmountOverlay(ctx context.Context, inode *fs.Inode, submounts []string) (*fs.Inode, error) {
 	// There is no real filesystem backing this ramfs tree, so we pass in
 	// "nil" here.
-	msrc := fs.NewNonCachingMountSource(nil, fs.MountSourceFlags{})
+	msrc := fs.NewNonCachingMountSource(ctx, nil, fs.MountSourceFlags{})
 	mountTree, err := ramfs.MakeDirectoryTree(ctx, msrc, submounts)
 	if err != nil {
 		return nil, errors.Wrap(err, "error creating mount tree")
@@ -317,12 +323,12 @@ func createRootMount(ctx context.Context, mounts []string) (*fs.Inode, error) {
 	return rootInode, nil
 }
 
-func createFDMap(ctx context.Context, k *kernel.Kernel, l *limits.LimitSet, console bool, stdioFDs []int) (*kernel.FDMap, error) {
+func createFDTable(ctx context.Context, k *kernel.Kernel, l *limits.LimitSet, console bool, stdioFDs []int) (*kernel.FDTable, error) {
 	if len(stdioFDs) != 3 {
 		return nil, errors.Errorf("stdioFDs should contain exactly 3 FDs (stdin, stdout, and stderr), but %d FDs received", len(stdioFDs))
 	}
 
-	fdm := k.NewFDMap()
+	fdm := k.NewFDTable()
 	defer fdm.DecRef()
 	mounter := fs.FileOwnerFromContext(ctx)
 
@@ -368,7 +374,7 @@ func createFDMap(ctx context.Context, k *kernel.Kernel, l *limits.LimitSet, cons
 		}
 
 		// Add the file to the FD map.
-		if err := fdm.NewFDAt(kdefs.FD(appFD), appFile, kernel.FDFlags{}, l); err != nil {
+		if err := fdm.NewFDAt(ctx, int32(appFD), appFile, kernel.FDFlags{}); err != nil {
 			return nil, err
 		}
 	}
